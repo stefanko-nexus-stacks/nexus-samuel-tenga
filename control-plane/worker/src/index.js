@@ -467,7 +467,7 @@ async function sendNotification(env, config) {
 
   try {
     const teardownTime = `${config.teardownTime} ${getTimezoneAbbr(config.timezone)}`;
-    const controlPlaneUrl = safeHttpsUrl(env.CONTROL_PLANE_URL, `https://control.${env.DOMAIN}`);
+    const controlPlaneUrl = safeHttpsUrl(env.CONTROL_PLANE_URL, `https://control-samuel-tenga.nona.company`);
 
     const emailHtml = `
       <div style="font-family:monospace;background:#0a0a0f;color:#00ff88;padding:20px">
@@ -498,7 +498,7 @@ async function sendNotification(env, config) {
     `;
 
     const emailPayload = {
-      from: `Nexus-Stack <nexus@${env.DOMAIN}>`,
+      from: `Nexus-Stack <nexus@${env.BASE_DOMAIN || env.DOMAIN}>`,
       to: userEmail ? [userEmail] : [env.ADMIN_EMAIL],
       subject: '⚠️ Scheduled Teardown in 15 Minutes',
       html: emailHtml,
