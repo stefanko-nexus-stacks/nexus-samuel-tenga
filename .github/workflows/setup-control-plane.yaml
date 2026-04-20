@@ -437,7 +437,23 @@ jobs:
           EOF
           sed -i 's/^          //' backend.hcl
 
-          tofu init -backend-config=backend.hcl
+          # Retry tofu init a few times: the OpenTofu provider registry
+          # occasionally returns a transient failure fetching authentication
+          # checksums ("could not query provider registry ... failed to retrieve
+          # authentication checksums"), and a single retry after a short pause
+          # almost always succeeds.
+          for ATTEMPT in 1 2 3; do
+            if tofu init -backend-config=backend.hcl; then
+              break
+            fi
+            if [ "$ATTEMPT" -lt 3 ]; then
+              echo "⚠️  tofu init failed on attempt $ATTEMPT — retrying in 15s..."
+              sleep 15
+            else
+              echo "❌ tofu init failed after 3 attempts"
+              exit 1
+            fi
+          done
 
       - name: Clean up orphaned Hetzner Object Storage buckets
         run: |
@@ -754,7 +770,6 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           GH_TOKEN: ${{ secrets.GH_SECRETS_TOKEN }}
           DOMAIN: ${{ secrets.DOMAIN }}
-          BASE_DOMAIN: ${{ secrets.BASE_DOMAIN }}
           EXISTING_R2_DATA_BUCKET: ${{ secrets.R2_DATA_BUCKET }}
         run: |
           # The unified R2 token (created by init-r2-state.sh) handles both
@@ -860,7 +875,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GH_SECRETS_TOKEN }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           DOMAIN: ${{ secrets.DOMAIN }}
-          BASE_DOMAIN: ${{ secrets.BASE_DOMAIN }}
         run: |
           echo "⚙️  Setting Scheduled Teardown Worker secrets..."
           # Derive worker name from domain (must match Terraform naming: ${local.resource_prefix}-worker)
@@ -893,7 +907,6 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           DOMAIN: ${{ secrets.DOMAIN }}
-          BASE_DOMAIN: ${{ secrets.BASE_DOMAIN }}
           WORKER_AUTH_TOKEN: ${{ secrets.GH_SECRETS_TOKEN }}
         run: |
           echo "🩺 Running Worker diagnostic health check..."
@@ -1046,6 +1059,28 @@ jobs:
             fi
           fi
 
+          # BASE_DOMAIN is the Resend-verified parent used as the email
+          # sender. On single-stack installs BASE_DOMAIN is typically empty
+          # and the Functions code falls back to DOMAIN at runtime.
+          #
+          # Reconcile in BOTH directions: when non-empty, upsert; when empty,
+          # delete any previously-set Pages secret so a lingering value
+          # can't keep overriding DOMAIN after the operator unset it.
+          if [ -n "$BASE_DOMAIN" ]; then
+            echo "  Setting BASE_DOMAIN secret..."
+            if ! echo "$BASE_DOMAIN" | npx wrangler@4 pages secret put BASE_DOMAIN \
+              --project-name="$PROJECT_NAME" 2>&1; then
+              echo "⚠️  Failed to set BASE_DOMAIN"
+            fi
+          else
+            echo "  BASE_DOMAIN is empty; removing any stale Pages secret so runtime falls back to DOMAIN..."
+            # `secret delete` is interactive by default and fails loudly if the
+            # secret doesn't exist. Pipe 'y' to auto-confirm, swallow output,
+            # and don't fail the step when the secret wasn't there to begin with.
+            echo y | npx wrangler@4 pages secret delete BASE_DOMAIN \
+              --project-name="$PROJECT_NAME" >/dev/null 2>&1 || true
+          fi
+
           # SUBDOMAIN_SEPARATOR + derived URLs. These MUST be secrets (not Terraform
           # environment_variables) because `wrangler pages deploy` later in this
           # workflow wipes env_vars that aren't listed in wrangler.toml. Secrets
@@ -1120,7 +1155,6 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           DOMAIN: ${{ secrets.DOMAIN }}
-          BASE_DOMAIN: ${{ secrets.BASE_DOMAIN }}
         run: |
           echo "🗄️  Initializing D1 database schema..."
           
@@ -1155,7 +1189,6 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           DOMAIN: ${{ secrets.DOMAIN }}
-          BASE_DOMAIN: ${{ secrets.BASE_DOMAIN }}
         run: |
           echo "📋 Initializing services from services.yaml to D1..."
           chmod +x .github/scripts/sync-deployed-state.sh
@@ -1285,7 +1318,7 @@ jobs:
           echo ""
           echo "✅ Control Plane setup complete!"
           echo ""
-          echo "📋 Control Plane: https://control-samuel-tenga.nona.company"
+          echo "📋 Control Plane: https://control.${{ secrets.DOMAIN }}"
           echo ""
           echo "ℹ️  Next steps:"
           echo "   1. Use the Control Plane to manage your infrastructure"
